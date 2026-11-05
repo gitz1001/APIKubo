@@ -1,8 +1,9 @@
-from fastapi import FastAPI
+"""Entrypoint: ``uvicorn main:app --port 8000`` (run from the gateway/ directory)."""
 
-app = FastAPI(title="APIKUBO Gateway", version="0.1.0")
+import logging
 
+from app.main import create_app
 
-@app.get("/health")
-def health_check():
-    return {"status": "ok"}
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+
+app = create_app()
