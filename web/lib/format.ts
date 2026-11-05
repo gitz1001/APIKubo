@@ -30,3 +30,23 @@ export function categoryLabel(id: string): string {
 export function typeLabel(id: string): string {
   return LISTING_TYPES.find((t) => t.id === id)?.label ?? id;
 }
+
+const RELATIVE = new Intl.RelativeTimeFormat("en", { numeric: "auto" });
+
+export function formatRelative(iso: string | null, now: number = Date.now()): string {
+  if (!iso) return "";
+  const diffSeconds = (Date.parse(iso) - now) / 1000;
+  if (Number.isNaN(diffSeconds)) return "";
+  const units: Array<[Intl.RelativeTimeFormatUnit, number]> = [
+    ["year", 31_536_000],
+    ["month", 2_592_000],
+    ["week", 604_800],
+    ["day", 86_400],
+    ["hour", 3_600],
+    ["minute", 60],
+  ];
+  for (const [unit, seconds] of units) {
+    if (Math.abs(diffSeconds) >= seconds) return RELATIVE.format(Math.round(diffSeconds / seconds), unit);
+  }
+  return "just now";
+}

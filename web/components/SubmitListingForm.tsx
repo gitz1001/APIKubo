@@ -42,9 +42,14 @@ function Field({ id, label, error, hint, children }: { id: string; label: string
   );
 }
 
-export function SubmitListingForm({ gatewayUrl }: { gatewayUrl: string }) {
+type Prefill = Partial<Pick<FormState, "name" | "tagline" | "documentation_url">>;
+
+export function SubmitListingForm({ gatewayUrl, initial = {} }: { gatewayUrl: string; initial?: Prefill }) {
   const router = useRouter();
-  const [form, setForm] = useState<FormState>(INITIAL);
+  const [form, setForm] = useState<FormState>(() => {
+    const prefilled = Object.fromEntries(Object.entries(initial).filter(([, v]) => Boolean(v))) as Prefill;
+    return { ...INITIAL, ...prefilled, slug: prefilled.name ? slugify(prefilled.name) : "" };
+  });
   const [slugTouched, setSlugTouched] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState("");

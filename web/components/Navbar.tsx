@@ -73,8 +73,9 @@ function HandlePrompt() {
 }
 
 const NAV_LINKS = [
-  { href: "/explore", label: "Explore" },
-  { href: "/submit", label: "Publish" },
+  { href: "/explore", label: "Explore", mobile: true },
+  { href: "/trending", label: "Trending", mobile: true },
+  { href: "/submit", label: "Publish", mobile: false },
 ];
 
 export function Navbar() {
@@ -119,7 +120,7 @@ export function Navbar() {
                     key={link.href}
                     href={link.href}
                     aria-current={active ? "page" : undefined}
-                    className={`font-medium transition-colors ${active ? "text-ink" : "text-muted hover:text-ink"}`}
+                    className={`font-medium transition-colors ${link.mobile ? "" : "hidden sm:inline"} ${active ? "text-ink" : "text-muted hover:text-ink"}`}
                   >
                     {link.label}
                   </Link>

@@ -1,8 +1,10 @@
 import { ArrowRight, KeyRound, Search, Zap } from "lucide-react";
 import Link from "next/link";
 import { CopyButton } from "@/components/CopyButton";
+import { TrendingRow } from "@/components/discover/TrendingRow";
 import { ListingCard } from "@/components/ListingCard";
 import { ui } from "@/components/ui";
+import { loadFeed } from "@/lib/discover/fetchers";
 import { gatewayUrl } from "@/lib/env";
 import { getRepo } from "@/lib/server/repo";
 import type { Listing } from "@/lib/types";
@@ -25,11 +27,10 @@ const STEPS = [
 export default async function HomePage() {
   let featured: Listing[] = [];
   let catalogError = false;
-  try {
-    featured = (await getRepo().listPublished()).slice(0, 6);
-  } catch {
-    catalogError = true;
-  }
+  const [catalog, trending] = await Promise.allSettled([getRepo().listPublished(), loadFeed("agents", "week")]);
+  if (catalog.status === "fulfilled") featured = catalog.value.slice(0, 6);
+  else catalogError = true;
+  const rising = trending.status === "fulfilled" ? trending.value.items.slice(0, 4) : [];
   const snippet = `curl ${gatewayUrl()}/v1/<listing>/<path> \\\n  -H "Authorization: Bearer $APIKUBO_KEY"`;
 
   return (
@@ -93,6 +94,25 @@ export default async function HomePage() {
           ))}
         </ol>
       </section>
+
+      {rising.length > 0 && (
+        <section className={`${ui.container} mt-20`} aria-labelledby="rising-title">
+          <div className="mb-6 flex flex-col justify-between gap-3 border-b border-line pb-4 sm:flex-row sm:items-end">
+            <div>
+              <h2 id="rising-title" className="text-2xl font-bold text-ink">Rising in AI this week</h2>
+              <p className="mt-1 text-sm text-muted">The fastest-growing new agent projects on GitHub, refreshed hourly.</p>
+            </div>
+            <Link href="/trending" className="inline-flex items-center gap-1.5 text-sm font-medium text-accent hover:text-accent-hover">
+              Agents, MCP servers, skills &amp; models <ArrowRight className="h-4 w-4" aria-hidden />
+            </Link>
+          </div>
+          <ol className="grid gap-3 md:grid-cols-2">
+            {rising.map((item, index) => (
+              <TrendingRow key={item.id} item={item} rank={index + 1} compact />
+            ))}
+          </ol>
+        </section>
+      )}
 
       <section id="explore" className={`${ui.container} mt-20`} aria-labelledby="featured-title">
         <div className="mb-8 flex flex-col justify-between gap-3 border-b border-line pb-4 sm:flex-row sm:items-end">

@@ -19,6 +19,18 @@ web (Next.js 14) ── Supabase (Postgres + RLS + Google OAuth)
 | `gateway/` | FastAPI reverse proxy: key auth, limits, SSRF guard, streaming, metering |
 | `src/`, root `package.json` | Google AI Studio preview scaffold (Vite). Not the production app; see PROJECT_CONTEXT.md |
 
+## Trending in AI (`/trending`)
+
+Discovery feeds for AI Agents, MCP Servers, Agent Skills, LLM Tools (GitHub Search API), Models and Demos
+(Hugging Face Hub API) and Launches (Hacker News via Algolia). Official APIs only, no HTML scraping.
+
+- **Ranking**: metric per day with age decay (`trendScore` in `web/lib/discover/normalize.ts`).
+- **Quality**: forks/archived/near-empty repos dropped; many-stars-no-forks repos down-ranked (likely bought stars);
+  moderators can hide owners or repos with `DISCOVER_BLOCKLIST`.
+- **Cost**: one API call per feed+window, cached for an hour in the Next.js data cache; failures aren't cached and
+  back off for 60s. Optional `GITHUB_TOKEN` (no scopes) raises GitHub's search limit from 10 to 30 req/min.
+- **Growth loop**: "Yours? List it" prefills the publish form from the repo.
+
 ## Quick start (demo mode, no accounts needed)
 
 ```bash

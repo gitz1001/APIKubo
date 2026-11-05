@@ -17,6 +17,7 @@ APIKUBO is a global marketplace for APIs and AI Skills designed with a gateway-f
 │   ├── app/                     # /, /explore, /listings/[slug], /submit, /dashboard, /login, /api/*
 │   ├── components/              # UI (ui.ts holds shared class recipes)
 │   ├── lib/                     # env, types, validation (shared rules), format, seed, auth-context
+│   │   ├── discover/            # Trending feeds: normalize (pure, tested), feeds config, cached fetchers
 │   │   └── server/              # auth, repo (Supabase + in-memory demo), http helpers, key generation
 │   └── supabase/migrations/     # 001 schema, 002 security hardening + RPCs
 └── src/ + root package.json     # Google AI Studio Vite preview scaffold — NOT the production app.
@@ -25,10 +26,11 @@ APIKUBO is a global marketplace for APIs and AI Skills designed with a gateway-f
 
 ### Build Status
 - Done: gateway MVP (auth, limits, quotas, SSRF guard, metering), DB hardening, catalog, listing pages,
-  publish flow, free-plan subscriptions, API key management, usage display.
+  publish flow, free-plan subscriptions, API key management, usage display, /trending discovery feeds.
 - Next: paid plans (Stripe checkout + webhook writing subscriptions with the service role), provider-side
   request signing (so providers can reject calls that bypass the gateway), upvotes UI, provider analytics,
-  OpenAPI ingestion, editing listings and plans after creation.
+  OpenAPI ingestion, editing listings and plans after creation, trending star-velocity snapshots
+  (store daily star counts so 'trending' covers established repos, not only new ones).
 
 ### Technology Stack
 - **Web**: Next.js 14 (App Router) + React 18 (Next 14 does not support React 19), TypeScript, Tailwind CSS v4, `next/font`, `@supabase/ssr`, `@supabase/supabase-js`, `lucide-react`

@@ -8,8 +8,21 @@ import { getSessionUser } from "@/lib/server/auth";
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Publish a listing" };
 
-export default async function SubmitPage() {
-  if (!(await getSessionUser())) redirect("/login?next=/submit");
+type Search = { [key: string]: string | string[] | undefined };
+const one = (value: string | string[] | undefined) => ((Array.isArray(value) ? value[0] : value) ?? "").trim();
+
+export default async function SubmitPage({ searchParams }: { searchParams: Search }) {
+  if (!(await getSessionUser())) {
+    const query = new URLSearchParams(Object.entries(searchParams).flatMap(([k, v]) => (typeof v === "string" ? [[k, v]] : []))).toString();
+    redirect(`/login?next=${encodeURIComponent(`/submit${query ? `?${query}` : ""}`)}`);
+  }
+  // Prefill from the Trending page ("Yours? List it"). Treated as untrusted: length-capped, https-only docs URL.
+  const docs = one(searchParams.docs);
+  const initial = {
+    name: one(searchParams.name).slice(0, 80),
+    tagline: one(searchParams.tagline).slice(0, 140),
+    documentation_url: /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+$/.test(docs) ? docs : "",
+  };
 
   return (
     <main className={`${ui.container} py-12`}>
@@ -21,7 +34,7 @@ export default async function SubmitPage() {
           forwards authenticated calls to you. Your upstream URL is never shown to consumers.
         </p>
       </div>
-      <SubmitListingForm gatewayUrl={gatewayUrl()} />
+      <SubmitListingForm gatewayUrl={gatewayUrl()} initial={initial} />
     </main>
   );
 }
