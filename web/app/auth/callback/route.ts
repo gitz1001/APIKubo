@@ -1,41 +1,26 @@
-import { createClient } from "@/lib/supabase/server";
 import { NextResponse } from "next/server";
+import { isSupabaseConfigured } from "@/lib/env";
+import { createClient } from "@/lib/supabase/server";
+import { safeNextPath } from "@/lib/validation";
 
+/**
+ * OAuth return URL. The profile row is created by the on_auth_user_created trigger,
+ * so nothing else needs writing here. `next` is restricted to same-site paths to
+ * prevent this route being used as an open redirect.
+ */
 export async function GET(request: Request) {
-  const requestUrl = new URL(request.url);
-  const code = requestUrl.searchParams.get("code");
-  const next = requestUrl.searchParams.get("next") || "/dashboard";
+  const url = new URL(request.url);
+  const next = safeNextPath(url.searchParams.get("next"));
+  const code = url.searchParams.get("code");
 
-  if (code) {
-    const supabase = createClient();
-    const { data, error } = await supabase.auth.exchangeCodeForSession(code);
-
-    if (!error && data?.user) {
-      const user = data.user;
-
-      // Ensure profiles record exists for first-time login
-      const { data: existingProfile } = await supabase
-        .from("profiles")
-        .select("id, username")
-        .eq("id", user.id)
-        .maybeSingle();
-
-      if (!existingProfile) {
-        const defaultHandle =
-          user.user_metadata?.username ||
-          user.email?.split("@")[0] ||
-          `user_${user.id.slice(0, 8)}`;
-
-        await supabase.from("profiles").insert({
-          id: user.id,
-          username: defaultHandle,
-          display_name: user.user_metadata?.full_name || user.user_metadata?.name || defaultHandle,
-          avatar_url: user.user_metadata?.avatar_url || user.user_metadata?.picture,
-        });
-      }
-    }
+  if (!isSupabaseConfigured() || !code) {
+    return NextResponse.redirect(new URL(`/login?error=oauth&next=${encodeURIComponent(next)}`, url.origin));
   }
 
-  // URL to redirect to after sign in process completes
-  return NextResponse.redirect(new URL(next, request.url));
+  const { error } = await createClient().auth.exchangeCodeForSession(code);
+  if (error) {
+    console.error("[auth] code exchange failed", error.message);
+    return NextResponse.redirect(new URL(`/login?error=oauth&next=${encodeURIComponent(next)}`, url.origin));
+  }
+  return NextResponse.redirect(new URL(next, url.origin));
 }

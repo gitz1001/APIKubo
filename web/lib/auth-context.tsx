@@ -1,270 +1,174 @@
 "use client";
 
-import React, { createContext, useContext, useEffect, useState } from "react";
-import { createClient } from "./supabase/client";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { DEMO_SESSION_COOKIE, isDemoAuthAllowed, isSupabaseConfigured } from "@/lib/env";
+import { DEMO_USER_ID, parseDemoSession, serializeDemoSession, type DemoSession } from "@/lib/demo-session";
+import { createClient } from "@/lib/supabase/client";
+import { validateHandle } from "@/lib/validation";
+
+export interface AuthUser {
+  id: string;
+  email: string | null;
+  fullName: string | null;
+  avatarUrl: string | null;
+}
 
 export interface UserProfile {
   id: string;
   username: string;
-  display_name: string;
-  avatar_url?: string;
-  bio?: string;
-  is_first_login?: boolean;
+  display_name: string | null;
+  avatar_url: string | null;
 }
 
-interface AuthContextType {
-  user: {
-    id: string;
-    email?: string;
-    user_metadata?: {
-      avatar_url?: string;
-      full_name?: string;
-      picture?: string;
-      name?: string;
-      custom_claims?: Record<string, unknown>;
-    };
-  } | null;
+type HandleResult = { ok: true } | { ok: false; error: string };
+
+interface AuthContextValue {
+  user: AuthUser | null;
   profile: UserProfile | null;
   loading: boolean;
+  isDemo: boolean;
+  /** Auto-generated handles (user_xxxx) prompt the user to pick a real one. */
   needsHandlePrompt: boolean;
-  setNeedsHandlePrompt: (val: boolean) => void;
-  updateHandle: (newHandle: string) => Promise<boolean>;
-  signInWithGoogle: (redirectTo?: string) => Promise<void>;
+  updateHandle: (handle: string) => Promise<HandleResult>;
+  signInWithGoogle: (next: string) => Promise<void>;
   signOut: () => Promise<void>;
 }
 
-const AuthContext = createContext<AuthContextType | undefined>(undefined);
+const AuthContext = createContext<AuthContextValue | undefined>(undefined);
+
+function readDemoSession(): DemoSession | null {
+  const raw = document.cookie
+    .split("; ")
+    .find((row) => row.startsWith(`${DEMO_SESSION_COOKIE}=`))
+    ?.slice(DEMO_SESSION_COOKIE.length + 1);
+  return parseDemoSession(raw);
+}
+
+function writeDemoSession(session: DemoSession | null) {
+  document.cookie = session
+    ? `${DEMO_SESSION_COOKIE}=${serializeDemoSession(session)}; path=/; max-age=604800; SameSite=Lax`
+    : `${DEMO_SESSION_COOKIE}=; path=/; max-age=0`;
+}
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<AuthContextType["user"]>(null);
+  const supabaseMode = isSupabaseConfigured();
+  const demoMode = !supabaseMode && isDemoAuthAllowed();
+  const supabase = useMemo(() => (supabaseMode ? createClient() : null), [supabaseMode]);
+
+  const [user, setUser] = useState<AuthUser | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
-  const [needsHandlePrompt, setNeedsHandlePrompt] = useState(false);
 
-  const supabase = createClient();
-
-  const loadSessionAndProfile = async () => {
+  const load = useCallback(async () => {
     try {
-      // 1. Check Supabase Auth
-      const { data: { session } } = await supabase.auth.getSession();
-
-      if (session?.user) {
-        setUser(session.user);
-        
-        // Fetch or ensure profile row
-        const { data: existingProfile } = await supabase
-          .from("profiles")
-          .select("*")
-          .eq("id", session.user.id)
-          .maybeSingle();
-
-        if (existingProfile) {
-          setProfile(existingProfile);
-          // Check if handle is still the default auto-generated one
-          if (!existingProfile.username || existingProfile.username.startsWith("user_")) {
-            setNeedsHandlePrompt(true);
-          }
-        } else {
-          // Trigger first-login profile setup
-          const defaultHandle =
-            session.user.user_metadata?.username ||
-            session.user.email?.split("@")[0] ||
-            `user_${session.user.id.slice(0, 8)}`;
-
-          const newProfile: UserProfile = {
-            id: session.user.id,
-            username: defaultHandle,
-            display_name: session.user.user_metadata?.full_name || defaultHandle,
-            avatar_url: session.user.user_metadata?.avatar_url || session.user.user_metadata?.picture,
-            is_first_login: true,
-          };
-
-          try {
-            await supabase.from("profiles").upsert(newProfile);
-          } catch {
-            // RLS or schema fallback
-          }
-
-          setProfile(newProfile);
-          setNeedsHandlePrompt(true);
+      if (supabase) {
+        const { data } = await supabase.auth.getUser();
+        const authUser = data.user;
+        if (!authUser) {
+          setUser(null);
+          setProfile(null);
+          return;
         }
-        setLoading(false);
+        const meta = authUser.user_metadata as Record<string, unknown>;
+        const text = (key: string) => (typeof meta[key] === "string" ? (meta[key] as string) : null);
+        setUser({
+          id: authUser.id,
+          email: authUser.email ?? null,
+          fullName: text("full_name") ?? text("name"),
+          avatarUrl: text("avatar_url") ?? text("picture"),
+        });
+        const { data: row } = await supabase
+          .from("profiles")
+          .select("id, username, display_name, avatar_url")
+          .eq("id", authUser.id)
+          .maybeSingle();
+        setProfile((row as UserProfile | null) ?? null);
         return;
       }
-
-      // 2. Check local dev / demo session cookie for environments without live Supabase credentials
-      const cookieMatch = document.cookie
-        .split("; ")
-        .find((row) => row.startsWith("apikubo_dev_session="));
-
-      if (cookieMatch) {
-        const decoded = JSON.parse(decodeURIComponent(cookieMatch.split("=")[1]));
-        if (decoded?.id) {
-          setUser(decoded);
-          const savedProfile = localStorage.getItem(`apikubo_profile_${decoded.id}`);
-          if (savedProfile) {
-            const p = JSON.parse(savedProfile);
-            setProfile(p);
-            if (!p.username || p.username.startsWith("user_")) {
-              setNeedsHandlePrompt(true);
-            }
-          } else {
-            const initialProfile: UserProfile = {
-              id: decoded.id,
-              username: decoded.user_metadata?.username || "developer",
-              display_name: decoded.user_metadata?.full_name || "APIKUBO Builder",
-              avatar_url: decoded.user_metadata?.avatar_url || "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80",
-              is_first_login: true,
-            };
-            localStorage.setItem(`apikubo_profile_${decoded.id}`, JSON.stringify(initialProfile));
-            setProfile(initialProfile);
-            setNeedsHandlePrompt(true);
-          }
-        }
+      if (demoMode) {
+        const session = readDemoSession();
+        setUser(session ? { id: session.id, email: session.email, fullName: session.full_name, avatarUrl: null } : null);
+        setProfile(session ? { id: session.id, username: session.username, display_name: session.full_name, avatar_url: null } : null);
       }
-    } catch (e) {
-      console.error("Auth initialization error:", e);
+    } catch (error) {
+      console.error("[auth] failed to load session", error);
     } finally {
       setLoading(false);
     }
-  };
+  }, [supabase, demoMode]);
 
   useEffect(() => {
-    loadSessionAndProfile();
+    void load();
+    if (!supabase) return;
+    const { data } = supabase.auth.onAuthStateChange((event) => {
+      if (event === "SIGNED_IN" || event === "USER_UPDATED" || event === "SIGNED_OUT") void load();
+    });
+    return () => data.subscription.unsubscribe();
+  }, [load, supabase]);
 
-    const { data: authListener } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
-        if (event === "SIGNED_IN" || event === "USER_UPDATED") {
-          loadSessionAndProfile();
-        } else if (event === "SIGNED_OUT") {
-          setUser(null);
-          setProfile(null);
-          setNeedsHandlePrompt(false);
+  const signInWithGoogle = useCallback(
+    async (next: string) => {
+      if (supabase) {
+        const redirectTo = `${window.location.origin}/auth/callback?next=${encodeURIComponent(next)}`;
+        const { error } = await supabase.auth.signInWithOAuth({ provider: "google", options: { redirectTo } });
+        if (error) throw error;
+        return;
+      }
+      if (!demoMode) throw new Error("Sign-in is not configured. Set the Supabase environment variables.");
+      writeDemoSession({ id: DEMO_USER_ID, email: "builder@apikubo.dev", full_name: "Demo Builder", username: "user_demo" });
+      window.location.assign(next);
+    },
+    [supabase, demoMode],
+  );
+
+  const updateHandle = useCallback(
+    async (handle: string): Promise<HandleResult> => {
+      const parsed = validateHandle(handle);
+      if (!parsed.ok) return { ok: false, error: parsed.errors.handle };
+      if (!user || !profile) return { ok: false, error: "You are signed out" };
+
+      if (supabase) {
+        const { error } = await supabase.from("profiles").update({ username: parsed.value }).eq("id", user.id);
+        if (error) {
+          return { ok: false, error: error.code === "23505" ? "That handle is already taken" : "Could not save your handle" };
         }
-      }
-    );
-
-    return () => {
-      authListener?.subscription?.unsubscribe();
-    };
-  }, []);
-
-  const signInWithGoogle = async (redirectTo?: string) => {
-    const origin = typeof window !== "undefined" ? window.location.origin : "";
-    const callbackUrl = `${origin}/auth/callback${redirectTo ? `?next=${encodeURIComponent(redirectTo)}` : ""}`;
-
-    const isMock =
-      !process.env.NEXT_PUBLIC_SUPABASE_URL ||
-      process.env.NEXT_PUBLIC_SUPABASE_URL.includes("mock-apikubo") ||
-      process.env.NEXT_PUBLIC_SUPABASE_URL.includes("your-project-id");
-
-    if (!isMock) {
-      const { error } = await supabase.auth.signInWithOAuth({
-        provider: "google",
-        options: {
-          redirectTo: callbackUrl,
-          queryParams: {
-            access_type: "offline",
-            prompt: "consent",
-          },
-        },
-      });
-      if (error) {
-        console.error("Supabase Google Auth error:", error.message);
-      }
-    } else {
-      // Local dev simulation: create a verified session that survives refresh
-      const mockUser = {
-        id: "usr_google_test_" + Math.random().toString(36).substring(2, 9),
-        email: "alex.builder@apikubo.dev",
-        user_metadata: {
-          full_name: "Alex Rivera",
-          name: "Alex Rivera",
-          avatar_url: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80",
-          picture: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80",
-        },
-      };
-      // Set session cookie for middleware (survives refresh)
-      document.cookie = `apikubo_dev_session=${encodeURIComponent(JSON.stringify(mockUser))}; path=/; max-age=604800; SameSite=Lax`;
-      
-      const initialProfile: UserProfile = {
-        id: mockUser.id,
-        username: "user_" + mockUser.id.slice(16),
-        display_name: mockUser.user_metadata.full_name,
-        avatar_url: mockUser.user_metadata.avatar_url,
-        is_first_login: true,
-      };
-      localStorage.setItem(`apikubo_profile_${mockUser.id}`, JSON.stringify(initialProfile));
-
-      setUser(mockUser);
-      setProfile(initialProfile);
-      setNeedsHandlePrompt(true);
-
-      const target = redirectTo || "/dashboard";
-      window.location.href = target;
-    }
-  };
-
-  const updateHandle = async (newHandle: string) => {
-    const cleanHandle = newHandle.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "");
-    if (!cleanHandle || !user) return false;
-
-    if (profile) {
-      const updated = { ...profile, username: cleanHandle, is_first_login: false };
-      setProfile(updated);
-
-      if (user.id.startsWith("usr_google_test_")) {
-        localStorage.setItem(`apikubo_profile_${user.id}`, JSON.stringify(updated));
       } else {
-        await supabase
-          .from("profiles")
-          .update({ username: cleanHandle, updated_at: new Date().toISOString() })
-          .eq("id", user.id);
+        const session = readDemoSession();
+        if (session) writeDemoSession({ ...session, username: parsed.value });
       }
-    }
-    setNeedsHandlePrompt(false);
-    return true;
-  };
+      setProfile({ ...profile, username: parsed.value });
+      return { ok: true };
+    },
+    [supabase, user, profile],
+  );
 
-  const signOut = async () => {
-    try {
-      await supabase.auth.signOut();
-    } catch {
-      // Ignored in mock
-    }
-    // Clear cookies & local storage
-    document.cookie = "apikubo_dev_session=; path=/; max-age=0; expires=Thu, 01 Jan 1970 00:00:00 GMT";
-    if (user?.id) {
-      localStorage.removeItem(`apikubo_profile_${user.id}`);
-    }
+  const signOut = useCallback(async () => {
+    if (supabase) await supabase.auth.signOut();
+    writeDemoSession(null);
     setUser(null);
     setProfile(null);
-    setNeedsHandlePrompt(false);
-    window.location.href = "/";
-  };
+    window.location.assign("/");
+  }, [supabase]);
 
-  return (
-    <AuthContext.Provider
-      value={{
-        user,
-        profile,
-        loading,
-        needsHandlePrompt,
-        setNeedsHandlePrompt,
-        updateHandle,
-        signInWithGoogle,
-        signOut,
-      }}
-    >
-      {children}
-    </AuthContext.Provider>
+  const value = useMemo<AuthContextValue>(
+    () => ({
+      user,
+      profile,
+      loading,
+      isDemo: demoMode,
+      needsHandlePrompt: Boolean(user && profile && profile.username.startsWith("user_")),
+      updateHandle,
+      signInWithGoogle,
+      signOut,
+    }),
+    [user, profile, loading, demoMode, updateHandle, signInWithGoogle, signOut],
   );
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
-export function useAuth() {
+export function useAuth(): AuthContextValue {
   const context = useContext(AuthContext);
-  if (!context) {
-    throw new Error("useAuth must be used within an AuthProvider");
-  }
+  if (!context) throw new Error("useAuth must be used within an AuthProvider");
   return context;
 }

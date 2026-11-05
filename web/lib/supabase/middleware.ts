@@ -1,73 +1,40 @@
-import { createServerClient, type CookieOptions } from "@supabase/ssr";
+import { createServerClient } from "@supabase/ssr";
 import { type NextRequest, NextResponse } from "next/server";
+import { DEMO_SESSION_COOKIE, isDemoAuthAllowed, isSupabaseConfigured, supabaseAnonKey, supabaseUrl } from "@/lib/env";
+import { parseDemoSession } from "@/lib/demo-session";
+
+const PROTECTED_PREFIXES = ["/dashboard", "/submit"];
 
 export async function updateSession(request: NextRequest) {
-  let response = NextResponse.next({
-    request: {
-      headers: request.headers,
-    },
-  });
+  let response = NextResponse.next({ request });
+  let signedIn = false;
 
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "https://mock-apikubo.supabase.co";
-  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.dummy_anon_key";
-
-  const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
-    cookies: {
-      get(name: string) {
-        return request.cookies.get(name)?.value;
+  if (isSupabaseConfigured()) {
+    const supabase = createServerClient(supabaseUrl(), supabaseAnonKey(), {
+      cookies: {
+        getAll() {
+          return request.cookies.getAll();
+        },
+        setAll(cookiesToSet, headers) {
+          cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value));
+          response = NextResponse.next({ request });
+          cookiesToSet.forEach(({ name, value, options }) => response.cookies.set(name, value, options));
+          // Refreshed auth cookies must never be cached by a CDN and served to someone else.
+          Object.entries(headers ?? {}).forEach(([key, value]) => response.headers.set(key, value));
+        },
       },
-      set(name: string, value: string, options: CookieOptions) {
-        request.cookies.set(name, value);
-        response = NextResponse.next({
-          request: {
-            headers: request.headers,
-          },
-        });
-        response.cookies.set({ name, value, ...options });
-      },
-      remove(name: string, options: CookieOptions) {
-        request.cookies.delete(name);
-        response = NextResponse.next({
-          request: {
-            headers: request.headers,
-          },
-        });
-        response.cookies.set({ name, value: "", ...options, maxAge: 0 });
-      },
-    },
-  });
-
-  let user = null;
-
-  // Check Supabase session first
-  try {
+    });
+    // getUser() validates the JWT with Supabase Auth; getSession() would trust the cookie blindly.
     const { data } = await supabase.auth.getUser();
-    user = data.user;
-  } catch {
-    // In mock or disconnected mode, check dev session cookie
+    signedIn = Boolean(data.user);
+  } else if (isDemoAuthAllowed()) {
+    signedIn = parseDemoSession(request.cookies.get(DEMO_SESSION_COOKIE)?.value) !== null;
   }
 
-  // Support local dev / demo session cookie if Supabase credentials are mock
-  if (!user) {
-    const devSession = request.cookies.get("apikubo_dev_session")?.value;
-    if (devSession) {
-      try {
-        const parsed = JSON.parse(decodeURIComponent(devSession));
-        if (parsed && parsed.id) {
-          user = parsed;
-        }
-      } catch {
-        // invalid cookie
-      }
-    }
-  }
-
-  const { pathname } = request.nextUrl;
-  const isProtectedRoute = pathname.startsWith("/dashboard") || pathname.startsWith("/submit");
-
-  if (isProtectedRoute && !user) {
+  const { pathname, search } = request.nextUrl;
+  if (!signedIn && PROTECTED_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`))) {
     const loginUrl = new URL("/login", request.url);
-    loginUrl.searchParams.set("next", pathname);
+    loginUrl.searchParams.set("next", `${pathname}${search}`);
     return NextResponse.redirect(loginUrl);
   }
 
